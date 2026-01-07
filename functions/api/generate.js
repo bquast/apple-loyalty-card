@@ -29,7 +29,7 @@ function generateSerial() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
-import { downloadZip } from './client-zip-worker.js';
+import { downloadZip } from '../../client-zip-worker.js';
 
 export async function onRequestPost(context) {
   const { request, env } = context;
