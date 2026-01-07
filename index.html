@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>The Flying Dutchman Loyalty Card</title>
+    <style>
+        body { font-family: sans-serif; background: #f8f8f8; padding: 20px; }
+        form { max-width: 400px; margin: auto; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        input { display: block; width: 100%; margin: 10px 0; padding: 10px; }
+        button { background: #4CAF50; color: white; border: none; padding: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <form id="signupForm">
+        <h2>Join Loyalty Program</h2>
+        <input type="text" id="name" placeholder="Your Name" required>
+        <button type="submit">Get Your Card</button>
+    </form>
+    <script>
+        const form = document.getElementById('signupForm');
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('name').value;
+            const response = await fetch('/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            if (response.ok) {
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'loyalty.pkpass';
+                a.click();
+                URL.revokeObjectURL(url);
+            } else {
+                alert('Error generating card');
+            }
+        });
+    </script>
+</body>
+</html>
