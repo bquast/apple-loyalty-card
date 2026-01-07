@@ -1,3 +1,5 @@
+import JSZip from '../../jszip-esm.js';
+
 // PEM to ArrayBuffer
 function pemToArrayBuffer(pem) {
   const base64 = pem.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s+/g, '');
@@ -28,8 +30,6 @@ async function signData(privateKeyPem, data) {
 function generateSerial() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
-
-import { downloadZip } from '../../client-zip-worker.js';
 
 export async function onRequestPost(context) {
   const { request, env } = context;
@@ -99,7 +99,7 @@ export async function onRequestPost(context) {
   const files = {
     'pass.json': passJsonBuffer,
     'logo.png': logoBuffer,
-    // Add 'icon.png' etc. if needed
+    // Add 'icon.png', etc. similarly if needed
   };
   
   // Manifest
@@ -118,23 +118,17 @@ export async function onRequestPost(context) {
   const signatureBuffer = await signData(env.PASS_PRIVATE_KEY, manifestHash);
   files['signature'] = signatureBuffer;
   
-  // Prepare entries for client-zip
-  const zipEntries = [];
-  for (const [filename, buffer] of Object.entries(files)) {
-    zipEntries.push({
-      name: filename,
-      lastModified: new Date(),
-      input: buffer  // ArrayBuffer is supported
-    });
+  // ZIP with JSZip
+  const zip = new JSZip();
+  for (const [file, buffer] of Object.entries(files)) {
+    zip.file(file, buffer);
   }
+  const zipBuffer = await zip.generateAsync({ type: 'uint8array' });
   
-  // Get streaming ZIP Response
-  const zipResponse = await downloadZip(zipEntries);
-  
-  // Modify headers
-  const modifiedResponse = new Response(zipResponse.body, zipResponse);
-  modifiedResponse.headers.set('Content-Type', 'application/vnd.apple.pkpass');
-  modifiedResponse.headers.set('Content-Disposition', 'attachment; filename="loyalty.pkpass"');
-  
-  return modifiedResponse;
+  return new Response(zipBuffer, {
+    headers: {
+      'Content-Type': 'application/vnd.apple.pkpass',
+      'Content-Disposition': 'attachment; filename="loyalty.pkpass"'
+    }
+  });
 }
