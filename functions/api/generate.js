@@ -1,6 +1,6 @@
 // Load JSZip (since it's in root, fetch as asset)
 async function loadJSZip(env) {
-  const jszipResp = await env.ASSETS.fetch('./jszip.min.js');
+  const jszipResp = await env.ASSETS.fetch('jszip.min.js');
   const jszipText = await jszipResp.text();
   const exports = {};
   new Function('module', jszipText)({ exports });
