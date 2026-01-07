@@ -1,4 +1,4 @@
-import * as forge from '../../forge.js';
+import * as forge from '../../forge.min.js';
 
 // PEM to ArrayBuffer not needed now – Forge handles PEM directly
 
