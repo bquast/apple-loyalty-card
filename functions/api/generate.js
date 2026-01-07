@@ -1,5 +1,3 @@
-import JSZip from '../../jszip-esm.js';
-
 // PEM to ArrayBuffer
 function pemToArrayBuffer(pem) {
   const base64 = pem.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s+/g, '');
@@ -95,11 +93,11 @@ export async function onRequestPost(context) {
   const passJsonString = JSON.stringify(passJson);
   const passJsonBuffer = new TextEncoder().encode(passJsonString);
   
-  // Files map (name to ArrayBuffer)
+  // Files map (name to Uint8Array – use Uint8Array for easier concat)
   const files = {
-    'pass.json': passJsonBuffer,
-    'logo.png': logoBuffer,
-    // Add 'icon.png', etc. similarly if needed
+    'pass.json': new Uint8Array(passJsonBuffer),
+    'logo.png': new Uint8Array(logoBuffer),
+    // Add 'icon.png' etc. if needed
   };
   
   // Manifest
@@ -111,19 +109,15 @@ export async function onRequestPost(context) {
   }
   const manifestString = JSON.stringify(manifest);
   const manifestBuffer = new TextEncoder().encode(manifestString);
-  files['manifest.json'] = manifestBuffer;
+  files['manifest.json'] = new Uint8Array(manifestBuffer);
   
   // Signature
   const manifestHash = await sha1(manifestBuffer);
   const signatureBuffer = await signData(env.PASS_PRIVATE_KEY, manifestHash);
-  files['signature'] = signatureBuffer;
+  files['signature'] = new Uint8Array(signatureBuffer);
   
-  // ZIP with JSZip
-  const zip = new JSZip();
-  for (const [file, buffer] of Object.entries(files)) {
-    zip.file(file, buffer);
-  }
-  const zipBuffer = await zip.generateAsync({ type: 'uint8array' });
+  // Generate ZIP buffer (stored mode, no compression)
+  const zipBuffer = createZip(files);
   
   return new Response(zipBuffer, {
     headers: {
@@ -131,4 +125,117 @@ export async function onRequestPost(context) {
       'Content-Disposition': 'attachment; filename="loyalty.pkpass"'
     }
   });
+}
+
+// Manual ZIP creator for stored files (compression 0, vanilla JS)
+function createZip(files) {
+  const centralRecords = [];
+  const endCentral = { offset: 0, size: 0 };
+  let dataOffset = 0;
+  const encoder = new TextEncoder();
+
+  // Local file headers and data
+  const localHeadersAndData = [];
+  for (const [name, data] of Object.entries(files)) {
+    const nameBytes = encoder.encode(name);
+    const localHeader = new Uint8Array(30 + nameBytes.length);
+    const view = new DataView(localHeader.buffer);
+
+    view.setUint32(0, 0x04034b50, true); // Local file header signature
+    view.setUint16(4, 20, true); // Version needed to extract (2.0)
+    view.setUint16(6, 0, true); // General purpose bit flag
+    view.setUint16(8, 0, true); // Compression method (0 = stored)
+    view.setUint16(10, 0, true); // Last mod file time
+    view.setUint16(12, 0, true); // Last mod file date
+    view.setUint32(14, crc32(data), true); // CRC-32
+    view.setUint32(18, data.length, true); // Compressed size
+    view.setUint32(22, data.length, true); // Uncompressed size
+    view.setUint16(26, nameBytes.length, true); // File name length
+    view.setUint16(28, 0, true); // Extra field length
+
+    localHeader.set(nameBytes, 30); // File name
+
+    localHeadersAndData.push(localHeader);
+    localHeadersAndData.push(data);
+
+    // Central directory record for this file
+    const centralRecord = new Uint8Array(46 + nameBytes.length);
+    const cView = new DataView(centralRecord.buffer);
+
+    cView.setUint32(0, 0x02014b50, true); // Central file header signature
+    view.setUint16(4, 20, true); // Version made by (2.0)
+    cView.setUint16(6, 20, true); // Version needed to extract
+    cView.setUint16(8, 0, true); // General purpose bit flag
+    cView.setUint16(10, 0, true); // Compression method
+    cView.setUint16(12, 0, true); // Last mod file time
+    cView.setUint16(14, 0, true); // Last mod file date
+    cView.setUint32(16, crc32(data), true); // CRC-32
+    cView.setUint32(20, data.length, true); // Compressed size
+    cView.setUint32(24, data.length, true); // Uncompressed size
+    cView.setUint16(28, nameBytes.length, true); // File name length
+    cView.setUint16(30, 0, true); // Extra field length
+    cView.setUint16(32, 0, true); // File comment length
+    cView.setUint16(34, 0, true); // Disk number start
+    cView.setUint16(36, 0, true); // Internal file attributes
+    cView.setUint32(38, 0, true); // External file attributes
+    cView.setUint32(42, dataOffset, true); // Relative offset of local header
+
+    centralRecord.set(nameBytes, 46); // File name
+
+    centralRecords.push(centralRecord);
+
+    dataOffset += localHeader.length + data.length;
+  }
+
+  // End of central directory
+  const centralSize = centralRecords.reduce((sum, rec) => sum + rec.length, 0);
+  const endHeader = new Uint8Array(22);
+  const eView = new DataView(endHeader.buffer);
+
+  eView.setUint32(0, 0x06054b50, true); // End of central dir signature
+  eView.setUint16(4, 0, true); // Number of this disk
+  eView.setUint16(6, 0, true); // Number of the disk with the start of the central directory
+  eView.setUint16(8, centralRecords.length, true); // Total number of entries on this disk
+  eView.setUint16(10, centralRecords.length, true); // Total number of entries
+  eView.setUint32(12, centralSize, true); // Size of the central directory
+  eView.setUint32(16, dataOffset, true); // Offset of start of central directory
+  eView.setUint16(20, 0, true); // .ZIP file comment length
+
+  // Concat all parts
+  let totalSize = dataOffset + centralSize + endHeader.length;
+  const zip = new Uint8Array(totalSize);
+  let offset = 0;
+
+  for (const part of localHeadersAndData) {
+    zip.set(part, offset);
+    offset += part.length;
+  }
+
+  for (const rec of centralRecords) {
+    zip.set(rec, offset);
+    offset += rec.length;
+  }
+
+  zip.set(endHeader, offset);
+
+  return zip;
+}
+
+// Simple CRC32 function (vanilla JS, no lib)
+function crc32(data) {
+  let crc = -1;
+  for (let i = 0; i < data.length; i++) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ data[i]) & 0xFF];
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+// Precomputed CRC table
+const CRC_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let j = 0; j < 8; j++) {
+    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  }
+  CRC_TABLE[i] = c;
 }
